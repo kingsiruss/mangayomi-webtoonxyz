@@ -12,7 +12,7 @@
     "hasCloudflare": true,
     "sourceCodeUrl": "https://raw.githubusercontent.com/kingsiruss/mangayomi-webtoonxyz/main/webtoonxyz.js",
     "apiUrl": "",
-    "version": "0.1.0",
+    "version": "0.1.2",
     "isManga": true,
     "itemType": 0,
     "isFullData": false,
