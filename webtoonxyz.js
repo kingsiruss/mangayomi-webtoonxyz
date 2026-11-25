@@ -7,34 +7,48 @@ const mangayomiSources = [{
     "iconUrl": "https://www.webtoon.xyz/favicon.ico",
     "typeSource": "single",
     "itemType": 0,
-    "version": "0.1.0",
+    "version": "0.1.1",
     "isNsfw": true,
     "pkgPath": "manga/src/en/webtoonxyz.js",
-    "notes": "Madara theme. Cloudflare protected. Set isNsfw true."
+    "notes": "Madara theme. Cloudflare protected. NSFW."
 }];
 
 class DefaultExtension extends MProvider {
   getHeaders(url) {
     return {
-      Referer: this.source.baseUrl,
+      Referer: this.source.baseUrl + "/",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     };
   }
 
-  mangaListFromPage(res, selector = ".page-item-detail") {
+  mangaListFromPage(res) {
     const doc = new Document(res.body);
     const list = [];
-    const mangaElements = doc.select(selector);
+    // Broader Madara selectors
+    const selectors = [
+      ".page-item-detail",
+      ".c-tabs-item__content",
+      ".manga",
+      ".page-listing-item .page-item-detail",
+      ".list-truyen-item-wrap",
+      ".item-thumb"
+    ];
+    let mangaElements = [];
+    for (const sel of selectors) {
+      mangaElements = doc.select(sel);
+      if (mangaElements && mangaElements.length > 0) break;
+    }
 
     for (const element of mangaElements) {
-      let linkElement = element.selectFirst(".item-summary a, .post-title a, a");
+      let linkElement = element.selectFirst(".post-title a, .item-summary a, h3 a, a");
       let name = "";
       let link = "";
       if (linkElement) {
-        name = linkElement.text.trim();
-        link = linkElement.attr("href");
+        name = (linkElement.text || "").trim();
+        link = linkElement.attr("href") || "";
       }
-      const imageElement = element.selectFirst(".item-thumb img, img");
+      const imageElement = element.selectFirst("img");
       let imageUrl = imageElement ? this.getImageUrl(imageElement) : "";
 
       if (name && link) {
@@ -42,7 +56,7 @@ class DefaultExtension extends MProvider {
       }
     }
 
-    const hasNextPage = doc.selectFirst("ul.pager a[rel=next], .pagination .next, a.next") !== null;
+    const hasNextPage = !!doc.selectFirst("ul.pager a[rel=next], .pagination .next, a.next, .nav-previous a, .page-numbers.next");
     return { list, hasNextPage };
   }
 
@@ -100,9 +114,22 @@ class DefaultExtension extends MProvider {
   }
 
   async getPopular(page) {
-    const url = `${this.getBaseUrl()}/?s&post_type=wp-manga&m_orderby=views&page=${page}`;
-    const res = await new Client().get(url, this.getHeaders());
-    return this.mangaListFromPage(res);
+    // Try common Madara popular endpoints
+    const base = this.getBaseUrl();
+    const urls = [
+      `${base}/?m_orderby=views&page=${page}`,
+      `${base}/manga/?m_orderby=views&page=${page}`,
+      `${base}/?s&post_type=wp-manga&m_orderby=views&page=${page}`,
+      page === 1 ? base : `${base}/page/${page}/`
+    ];
+    for (const url of urls) {
+      try {
+        const res = await new Client().get(url, this.getHeaders());
+        const result = this.mangaListFromPage(res);
+        if (result.list && result.list.length > 0) return result;
+      } catch (e) {}
+    }
+    return { list: [], hasNextPage: false };
   }
 
   get supportsLatest() {
@@ -110,18 +137,29 @@ class DefaultExtension extends MProvider {
   }
 
   async getLatestUpdates(page) {
-    const url = `${this.getBaseUrl()}/?s&post_type=wp-manga&m_orderby=latest&page=${page}`;
-    const res = await new Client().get(url, this.getHeaders());
-    return this.mangaListFromPage(res);
+    const base = this.getBaseUrl();
+    const urls = [
+      page === 1 ? base : `${base}/page/${page}/`,
+      `${base}/?m_orderby=latest&page=${page}`,
+      `${base}/?s&post_type=wp-manga&m_orderby=latest&page=${page}`
+    ];
+    for (const url of urls) {
+      try {
+        const res = await new Client().get(url, this.getHeaders());
+        const result = this.mangaListFromPage(res);
+        if (result.list && result.list.length > 0) return result;
+      } catch (e) {}
+    }
+    return { list: [], hasNextPage: false };
   }
 
   async search(query, page, filters) {
-    let url = this.getBaseUrl();
+    const base = this.getBaseUrl();
+    let url;
     if (query && query.trim()) {
-      url += `/?s=${encodeURIComponent(query)}&post_type=wp-manga&page=${page}`;
+      url = `${base}/?s=${encodeURIComponent(query)}&post_type=wp-manga&page=${page}`;
     } else {
-      url += `/?s&post_type=wp-manga&page=${page}`;
-      // Simple orderby if filters present
+      url = `${base}/?s&post_type=wp-manga&page=${page}`;
       if (filters && filters.length > 0) {
         const order = filters.find(f => f.name === "orderby");
         if (order && order.state > 0 && order.values[order.state]) {
@@ -138,25 +176,25 @@ class DefaultExtension extends MProvider {
     const res = await new Client().get(fullUrl, this.getHeaders());
     const doc = new Document(res.body);
 
-    const title = doc.selectFirst("div.post-title h1, h1")?.text?.trim() || "";
-    const description = doc.selectFirst("div.summary__content, .description-summary")?.text?.trim() || "";
-    const imageElement = doc.selectFirst("div.summary_image img");
+    const title = doc.selectFirst("div.post-title h1, h1, .post-title")?.text?.trim() || "";
+    const description = doc.selectFirst("div.summary__content, .description-summary, .summary__content")?.text?.trim() || "";
+    const imageElement = doc.selectFirst("div.summary_image img, .summary_image img");
     const imageUrl = imageElement ? this.getImageUrl(imageElement) : "";
 
-    const authorEl = doc.selectFirst(".author-content a, .summary-heading:contains(Author) + .summary-content");
+    const authorEl = doc.selectFirst(".author-content a, .summary-heading:contains(Author) + .summary-content, .manga-authors a");
     const author = authorEl?.text?.trim() || "";
 
-    const statusEl = doc.selectFirst(".summary-heading:contains(Status) + .summary-content, .post-status");
+    const statusEl = doc.selectFirst(".summary-heading:contains(Status) + .summary-content, .post-status, .summary-content");
     const status = this.toStatus(statusEl?.text);
 
     const genre = [];
-    doc.select(".genres-content a, .manga-genres a").forEach(g => {
+    doc.select(".genres-content a, .manga-genres a, .genres a").forEach(g => {
       const t = g.text?.trim();
       if (t) genre.push(t);
     });
 
     const chapters = [];
-    const chapterElements = doc.select("li.wp-manga-chapter");
+    const chapterElements = doc.select("li.wp-manga-chapter, .wp-manga-chapter");
     for (const el of chapterElements) {
       const a = el.selectFirst("a");
       if (!a) continue;
@@ -178,7 +216,7 @@ class DefaultExtension extends MProvider {
     const doc = new Document(res.body);
 
     const pages = [];
-    const imgs = doc.select("div.reading-content .page-break img, .reading-content img.wp-manga-chapter-img, div.page-break img");
+    const imgs = doc.select("div.reading-content .page-break img, .reading-content img, div.page-break img, .wp-manga-chapter-img");
     for (const img of imgs) {
       let imageUrl = this.getImageUrl(img);
       if (!imageUrl) continue;
